@@ -26,7 +26,7 @@ namespace Moon.Data.Provider
 
         public ObservableCollection<BinanceStreamKlineData> BData { get; set; } = new ObservableCollection<BinanceStreamKlineData>();
         public ObservableCollection<BinanceStreamTick[]> BAllPairsData { get; set; } = new ObservableCollection<BinanceStreamTick[]>();
-        public ObservableCollection<BinanceStreamOrderBook> BBookData { get; set; } = new ObservableCollection<BinanceStreamOrderBook>();
+        //public ObservableCollection<BinanceStreamOrderBook> BBookData { get; set; } = new ObservableCollection<BinanceStreamOrderBook>();
         public Grouper DataOrganizer { get; set; } = new Grouper();
         public ObservableCollection<BinanceStreamTrade> BDataTradeSeller { get; set; } = new ObservableCollection<BinanceStreamTrade>();
         public ObservableCollection<BinanceStreamTrade> BDataTradeBuyer { get; set; } = new ObservableCollection<BinanceStreamTrade>();
@@ -38,7 +38,7 @@ namespace Moon.Data.Provider
         public List<BinanceCandle> GenericCandle = new List<BinanceCandle>();
         public ProviderMode Mode { get; set; } = ProviderMode.All;
         public string Jscontainer { get; set; }
-        public string TypeOfData { get; set; } = "Core";
+        public string TypeOfData { get; set; } = "BinanceCore";
 
         public BinanceProvier()
         {
@@ -69,16 +69,15 @@ namespace Moon.Data.Provider
         /// <param name="From"></param>
         /// <param name="To"></param>
         /// <param name="Symbol"></param>
-        public List<BinanceStreamKlineData> GetDataFromTo(DateTime From, DateTime To, string Symbol)
+        public void GetDataFromTo(DateTime From, DateTime To, string Symbol, KlineInterval interval = KlineInterval.OneMinute)
         {
             Console.WriteLine("Core - Loading data for : {0}", Symbol);
 
             if (From > To) { throw new Exception(string.Format("From : {0} is superior to To : {1}", From, To));  }
 
-            var DayBetween = (To - From).TotalDays;
-            var CandleMin = this.bclient.Client.GetKlines(Symbol, KlineInterval.OneMinute, From, To, int.MaxValue);
-            var GroupPerHour = CandleMin.Data.GroupBy(y => y.CloseTime.Day);
-            List<BinanceStreamKlineData> returned = new List<BinanceStreamKlineData>();
+
+
+            var CandleMin = this.bclient.Client.GetKlines(Symbol, interval, startTime: From, endTime: To,limit:int.MaxValue);
             foreach(var data in CandleMin.Data)
             {
                 BinanceStreamKlineData formated = new BinanceStreamKlineData();
@@ -97,15 +96,26 @@ namespace Moon.Data.Provider
                 formated.Data.TakerBuyBaseAssetVolume = data.TakerBuyBaseAssetVolume;
                 formated.Data.TakerBuyQuoteAssetVolume = data.TakerBuyQuoteAssetVolume;
                 formated.Data.TradeCount = data.TradeCount;
-                returned.Add(formated);
+                var sourcedata = new Trady.Core.Candle(formated.Data.CloseTime, formated.Data.Open, formated.Data.High, formated.Data.Low, formated.Data.Close, formated.Data.Volume);
+                BinanceCandle Standardize = new BinanceCandle(sourcedata);
+                Standardize.Last = formated.Data.Final;
+                Standardize.Name = formated.Symbol;
+                Standardize.Candle = sourcedata;
+                Type myType = formated.Data.GetType();
+
+                //Extract all exchanger candle properties
+                IList<PropertyInfo> props = new List<PropertyInfo>(myType.GetProperties());
+                foreach (PropertyInfo prop in props)
+                {
+                    object propValue = prop.GetValue(formated.Data, null);
+                    Standardize.Properties.Add(prop.Name, propValue);
+                }
+                Standardize.Update();
+                this.Candles.Add(Standardize);
+
 
             }
-            return returned;
-
-
-            //var data = IncomingBinance.bclient.Client.GetKlines(textBox2.Text, KlineInterval.OneHour, Data_Datestart.Value, Data_DateEnd.Value, int.MaxValue);
-
-
+            Console.WriteLine("Core - Finished to load from {0} to {1} for symbol {2}", From, To, Symbol);
         }
 
 
@@ -120,30 +130,7 @@ namespace Moon.Data.Provider
             if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Add && Candles.Count() > 2)
             {
 
-               // will be migrated to TA Node
-
-                //var RawData = Candles.Select(y => y.Candle).ToList();
-                //var indexdcandles = new IndexedCandle(RawData, RawData.Count() - 1);
-                //var LastBinanceCandle = (BinanceCandle)e.NewItems[0];
-                //LastBinanceCandle.Properties.Add("Bearish",indexdcandles.IsBearish());
-                //LastBinanceCandle.Properties.Add("IsBullish", indexdcandles.IsBullish());
-                //LastBinanceCandle.Properties.Add("IsAccumDistBearish", indexdcandles.IsAccumDistBearish());
-                //LastBinanceCandle.Properties.Add("IsAccumDistBullish", indexdcandles.IsAccumDistBullish());
-                //LastBinanceCandle.Properties.Add("ClosePricePercentageChange", indexdcandles.ClosePricePercentageChange());
-                //LastBinanceCandle.Properties.Add("ClosePriceChange", indexdcandles.ClosePriceChange());
-                //LastBinanceCandle.Properties.Add("IsBreakingHistoricalHighestClose", indexdcandles.IsBreakingHistoricalHighestClose());
-                //LastBinanceCandle.Properties.Add("IsBreakingHistoricalHighestHigh", indexdcandles.IsBreakingHistoricalHighestHigh());
-                //LastBinanceCandle.Properties.Add("IsBreakingHistoricalLowestLow", indexdcandles.IsBreakingHistoricalLowestLow());
-                //LastBinanceCandle.Properties.Add("IsObvBearish", indexdcandles.IsObvBearish());
-                //LastBinanceCandle.Properties.Add("IsObvBullish", indexdcandles.IsObvBullish());
             }
-
-            Task.Run(() =>
-            {
-                System.Threading.Thread.Sleep(1000);
-                Candles.Purge();
-            });
-
         }
 
         private void LoadAlldata()
@@ -193,7 +180,13 @@ namespace Moon.Data.Provider
             {
                 var tick = this.bclient.Socket.SubscribeToAllSymbolTickerAsync((data) =>
                 {
+                    if(BAllPairsData.Count() > 2)
+                    {
+                        BAllPairsData.Clear();
+                    }
+
                     BAllPairsData.Add(data);
+
                     //decimal testpercent = 0;
                     //Console.WriteLine("Debug - Provider Core - Receiving data from ticker socket : {0}", data);
                     //foreach(var symbol in data)
@@ -238,7 +231,8 @@ namespace Moon.Data.Provider
                     //Remove Extra
                     var sourcedata = new Trady.Core.Candle(Candle.Data.CloseTime, Candle.Data.Open, Candle.Data.High, Candle.Data.Low, Candle.Data.Close, Candle.Data.Volume);
                     BinanceCandle Standardize = new BinanceCandle(sourcedata);
-                   
+
+                    Standardize.Last = Candle.Data.Final;
                     Standardize.Name = Candle.Symbol;
                     Standardize.Candle = sourcedata;
                     Type myType = Candle.Data.GetType();
@@ -258,6 +252,7 @@ namespace Moon.Data.Provider
                     }
                     catch(Exception ex)
                     {
+                        
                         Console.WriteLine("Exception during core candle add (computed) : {0} ", ex.Message); 
                     }
                     //Until fix
@@ -299,13 +294,13 @@ namespace Moon.Data.Provider
         /// Subscripte to KLine Stream
         /// </summary>
         /// <param name="Pair"></param>
-        public void SubscribeTo(string Pair)
+        public void SubscribeTo(string Pair, KlineInterval interval = KlineInterval.OneMinute)
         {
             Console.WriteLine("Core - Starting thread for Kline Stream for : {0}", Pair);
 
             Task.Run(() =>
             {
-                var tick = this.bclient.Socket.SubscribeToKlineStreamAsync(Pair, KlineInterval.OneMinute, (data) =>
+                var tick = this.bclient.Socket.SubscribeToKlineStreamAsync(Pair, interval, (data) =>
                 {
                     BData.Add(data);
 
@@ -322,8 +317,8 @@ namespace Moon.Data.Provider
             {
                 var book = this.bclient.Socket.SubscribeToPartialBookDepthStreamAsync(Pair, 10, (data) =>
                  {
-                     BBookData.Add(data);
-                     if (BBookData.Count > 2) BBookData.RemoveAt(0);
+                     //BBookData.Add(data);
+                     //if (BBookData.Count > 2) BBookData.RemoveAt(0);
 
                  });
                 while (Global.Shared.Running)
@@ -366,7 +361,8 @@ namespace Moon.Data.Provider
 
         public void Update()
         {
-            this.Jscontainer = Newtonsoft.Json.JsonConvert.SerializeObject(this);
+
+            this.Jscontainer = this.ToJson();
         }
     }
 }
